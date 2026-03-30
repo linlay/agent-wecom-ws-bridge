@@ -1,0 +1,19 @@
+services:
+  wecom-ws-bridge:
+    image: wecom-ws-bridge
+    build:
+      context: .
+    container_name: wecom-ws-bridge
+    env_file:
+      - ./.env
+    ports:
+      - "${LISTEN_ADDR:-11970}:11970"
+    restart: unless-stopped
+    networks:
+      zenmind-network:
+        aliases:
+          - wecom-ws-bridge
+
+networks:
+  zenmind-network:
+    external: true
