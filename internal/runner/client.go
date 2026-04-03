@@ -200,6 +200,42 @@ func (c *Client) Upload(ctx context.Context, params UploadParams) (json.RawMessa
 	return json.RawMessage(respBody), nil
 }
 
+// BuildURL constructs a full URL from the runner base URL and a relative path.
+func (c *Client) BuildURL(relativePath string) string {
+	p := strings.TrimSpace(relativePath)
+	if strings.HasPrefix(strings.ToLower(p), "http://") || strings.HasPrefix(strings.ToLower(p), "https://") {
+		return p
+	}
+	if strings.HasPrefix(p, "/") {
+		return c.baseURL + p
+	}
+	return c.baseURL + "/" + p
+}
+
+// DownloadFile downloads a file from the given URL with runner auth.
+func (c *Client) DownloadFile(url string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	if c.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http get: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("download status=%d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 100*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	return data, nil
+}
+
 func parseSSE(r io.Reader, onEvent func(StreamEvent) error) error {
 	reader := bufio.NewReaderSize(r, 128*1024)
 	var dataLines []string

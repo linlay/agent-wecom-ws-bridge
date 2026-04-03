@@ -214,7 +214,8 @@ func (b *Bridge) normalizeRunnerEvent(chatID string, raw json.RawMessage) json.R
 	)
 
 	// Best-effort chain: download runner artifact then upload to gateway.
-	go b.forwardArtifactToGateway(payload)
+	// Use original (runner-relative) URL for downloading, not the rewritten gateway URL.
+	go b.forwardArtifactToGateway(payload, originalURL)
 	return json.RawMessage(normalized)
 }
 
@@ -236,7 +237,7 @@ func (b *Bridge) rewriteArtifactURL(rawURL string) string {
 	return b.gatewayBaseURL + "/" + strings.TrimLeft(url, "/")
 }
 
-func (b *Bridge) forwardArtifactToGateway(event map[string]interface{}) {
+func (b *Bridge) forwardArtifactToGateway(event map[string]interface{}, originalArtifactURL string) {
 	if strings.TrimSpace(b.gatewayBaseURL) == "" || strings.TrimSpace(b.gatewayUploadPath) == "" {
 		slog.Debug("bridge.artifact.upload.skip", "reason", "gateway upload endpoint not configured")
 		return
@@ -250,13 +251,13 @@ func (b *Bridge) forwardArtifactToGateway(event map[string]interface{}) {
 		return
 	}
 
-	artifactURL, _ := artifact["url"].(string)
+	// Use the original runner-relative URL to build the download URL from runner.
+	artifactURL := originalArtifactURL
 	fileName, _ := artifact["name"].(string)
 	fileType, _ := artifact["type"].(string)
 	if fileType == "" {
 		fileType = "file"
 	}
-	size := toInt64(artifact["sizeBytes"])
 	if artifactID == "" {
 		artifactID = fmt.Sprintf("%s-%d", fileName, time.Now().UnixMilli())
 	}
@@ -268,35 +269,35 @@ func (b *Bridge) forwardArtifactToGateway(event map[string]interface{}) {
 		return
 	}
 
-	fileData, err := b.downloadFile(artifactURL)
+	// Build full download URL from runner base URL + original relative path.
+	downloadURL := b.runner.BuildURL(artifactURL)
+	fileData, err := b.runner.DownloadFile(downloadURL)
 	if err != nil {
 		slog.Error("bridge.artifact.upload.download_failed", "chatId", chatID, "artifactId", artifactID, "url", artifactURL, "error", err)
 		return
 	}
-	if size <= 0 {
-		size = int64(len(fileData))
-	}
-
 	uploadURL := b.gatewayBaseURL + "/" + strings.TrimLeft(path.Clean("/"+b.gatewayUploadPath), "/")
-	respBody, err := b.uploadToGateway(uploadURL, chatID, fileName, fileType, artifactID, size, fileData)
+	respBody, err := b.uploadToGateway(uploadURL, chatID, fileName, fileType, artifactID, fileData)
 	if err != nil {
 		slog.Error("bridge.artifact.upload_failed", "chatId", chatID, "artifactId", artifactID, "url", uploadURL, "error", err)
 		return
 	}
-	slog.Info("bridge.artifact.upload_done", "chatId", chatID, "artifactId", artifactID, "fileName", fileName, "sizeBytes", size, "uploadUrl", uploadURL, "response", string(respBody))
+	slog.Info("bridge.artifact.upload_done", "chatId", chatID, "artifactId", artifactID, "fileName", fileName, "sizeBytes", len(fileData), "uploadUrl", uploadURL, "response", string(respBody))
 }
 
-func (b *Bridge) uploadToGateway(uploadURL string, chatID string, fileName string, fileType string, requestID string, sizeBytes int64, fileData []byte) ([]byte, error) {
+func (b *Bridge) uploadToGateway(uploadURL string, chatID string, fileName string, fileType string, requestID string, fileData []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
 	_ = writer.WriteField("chatId", chatID)
-	_ = writer.WriteField("name", fileName)
-	_ = writer.WriteField("type", fileType)
-	_ = writer.WriteField("requestId", requestID)
-	_ = writer.WriteField("size", strconv.FormatInt(sizeBytes, 10))
-	if b.channel != "" {
-		_ = writer.WriteField("channel", b.channel)
+	if fileName != "" {
+		_ = writer.WriteField("name", fileName)
+	}
+	if fileType != "" {
+		_ = writer.WriteField("type", fileType)
+	}
+	if requestID != "" {
+		_ = writer.WriteField("requestId", requestID)
 	}
 
 	part, err := writer.CreateFormFile("file", fileName)
