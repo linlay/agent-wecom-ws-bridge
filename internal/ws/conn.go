@@ -1,6 +1,8 @@
 package ws
 
 import (
+	"encoding/json"
+	"log/slog"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -19,6 +21,11 @@ func (c *Conn) WriteJSON(v interface{}) error {
 	defer c.mu.Unlock()
 	if c.closed {
 		return websocket.ErrCloseSent
+	}
+	if slog.Default().Enabled(nil, slog.LevelDebug) {
+		if b, err := json.Marshal(v); err == nil {
+			slog.Debug("ws.send", "data", string(b))
+		}
 	}
 	return c.raw.WriteJSON(v)
 }

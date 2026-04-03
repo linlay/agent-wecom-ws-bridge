@@ -26,7 +26,16 @@ func main() {
 	}
 
 	runnerClient := runner.NewClient(cfg.RunnerBaseURL, cfg.BearerToken)
-	b := bridge.New(runnerClient, cfg.DefaultAgent)
+	b := bridge.New(
+		runnerClient,
+		cfg.DefaultAgent,
+		cfg.Channel,
+		cfg.GatewayBaseURL,
+		cfg.GatewayDownloadPath,
+		cfg.GatewayUploadPath,
+		cfg.GatewayAuthToken,
+		cfg.OverrideAgentKey,
+	)
 
 	gatewayURL := cfg.BuildGatewayURL()
 	slog.Info("bridge.starting",
@@ -44,6 +53,7 @@ func main() {
 		})
 		// 主动推送接口：curl -X POST http://127.0.0.1:11970/api/push -d '{"targetId":"userId或chatId","markdown":"你好"}'
 		mux.HandleFunc("/api/push", func(w http.ResponseWriter, r *http.Request) {
+			slog.Debug("http.push.recv", "method", r.Method, "remoteAddr", r.RemoteAddr)
 			if r.Method != http.MethodPost {
 				http.Error(w, "POST only", http.StatusMethodNotAllowed)
 				return
@@ -53,13 +63,17 @@ func main() {
 				Markdown string `json:"markdown"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				slog.Warn("http.push.bad_json", "error", err)
 				http.Error(w, "invalid json", http.StatusBadRequest)
 				return
 			}
+			slog.Info("http.push", "targetId", req.TargetID, "markdownLen", len(req.Markdown))
 			if err := b.Push(req.TargetID, req.Markdown); err != nil {
+				slog.Error("http.push.failed", "targetId", req.TargetID, "error", err)
 				http.Error(w, err.Error(), http.StatusServiceUnavailable)
 				return
 			}
+			slog.Info("http.push.ok", "targetId", req.TargetID)
 			w.Write([]byte("ok"))
 		})
 		if err := http.ListenAndServe(cfg.ListenAddr, mux); err != nil {

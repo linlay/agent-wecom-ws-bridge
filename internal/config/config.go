@@ -2,24 +2,32 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
 
 type Config struct {
-	// 对方 gateway 的 WSS 地址
-	GatewayWSURL string // 如 wss://gateway.example.com/ws/agent
+	// Peer gateway websocket endpoint.
+	GatewayWSURL string // e.g. wss://gateway.example.com/ws/agent
 	UserID       string
 	Ticket       string
 	AgentKey     string
 	Channel      string
 
-	// runner
-	RunnerBaseURL string
-	BearerToken   string
-	DefaultAgent  string
+	// Runner
+	RunnerBaseURL      string
+	BearerToken        string
+	DefaultAgent       string
+	OverrideAgentKey   string // if set, override agentKey sent to runner
 
-	// 本地 HTTP 端口（健康检查用）
+	// Gateway HTTP related
+	GatewayBaseURL      string // e.g. http://10.76.32.255:8080
+	GatewayDownloadPath string // e.g. /api/download
+	GatewayUploadPath   string // e.g. /api/upload
+	GatewayAuthToken    string // Bearer token for gateway upload
+
+	// Local health check listen address.
 	ListenAddr string
 }
 
@@ -32,10 +40,27 @@ func Load() (*Config, error) {
 		Channel:       envOr("GATEWAY_CHANNEL", "wecom"),
 		RunnerBaseURL: envOr("RUNNER_BASE_URL", "http://127.0.0.1:11949"),
 		BearerToken:   os.Getenv("RUNNER_BEARER_TOKEN"),
-		DefaultAgent:  envOr("DEFAULT_AGENT_KEY", "default"),
+		DefaultAgent:     envOr("DEFAULT_AGENT_KEY", "default"),
+		OverrideAgentKey: os.Getenv("OVERRIDE_AGENT_KEY"),
 		ListenAddr:    envOr("LISTEN_ADDR", ":11970"),
 	}
+
 	cfg.RunnerBaseURL = strings.TrimRight(cfg.RunnerBaseURL, "/")
+	cfg.GatewayBaseURL = strings.TrimRight(envOr("AGENT_GATEWAY_BASE_URL", ""), "/")
+	if cfg.GatewayBaseURL == "" {
+		// Auto derive from websocket URL: ws://host:port/path -> http://host:port.
+		if parsed, err := url.Parse(cfg.GatewayWSURL); err == nil {
+			scheme := "http"
+			if parsed.Scheme == "wss" {
+				scheme = "https"
+			}
+			cfg.GatewayBaseURL = scheme + "://" + parsed.Host
+		}
+	}
+	cfg.GatewayDownloadPath = envOr("AGENT_GATEWAY_DOWNLOAD_PATH", "/api/download")
+	cfg.GatewayUploadPath = envOr("AGENT_GATEWAY_UPLOAD_PATH", "/api/upload")
+	cfg.GatewayAuthToken = os.Getenv("AGENT_GATEWAY_AUTH_TOKEN")
+
 	if cfg.GatewayWSURL == "" {
 		return nil, fmt.Errorf("GATEWAY_WS_URL is required")
 	}
@@ -45,7 +70,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// BuildGatewayURL 拼接完整的 WSS 连接地址
+// BuildGatewayURL builds full websocket URL with query params.
 func (c *Config) BuildGatewayURL() string {
 	url := strings.TrimRight(c.GatewayWSURL, "/")
 	sep := "?"
